@@ -2,6 +2,7 @@
 #
 # TcpQuality Canvas 监测脚本 默认定时120秒熔断
 # 参数 -v4 -v6 / -gd -sh -js 等省份缩写 / -t 300 -t 0 （300秒 或 不限时--注意cpu占用）
+#
 
 set -e
 
@@ -47,7 +48,7 @@ declare -A NODE_ACTIVE
 
 ONLY_IPV4=0
 ONLY_IPV6=0
-TOTAL_TIMEOUT=120  # 🌟 全局核心默认定时熔断阈值（120秒）
+TOTAL_TIMEOUT=120  # 全局核心默认定时看板关停阈值（120秒）
 
 # ===================== 颜色与基础变量定义 =====================
 RED='\033[0;31m';    GREEN='\033[0;32m';    YELLOW='\033[0;33m'
@@ -180,14 +181,22 @@ route_label_from_ip_trace() {
   ' "$2" "$3" "$1"
 }
 
+# 🌟 将 IP 协议栈特征（$family）作为核心参数深度捆绑、写入临时原子文件
 route_trace_one() {
-  local outfile="${RESULT_DIR}/${9}_${6}"; local trace_file="${RESULT_DIR}/${9}_trace_${6}"
-  if [ -z "$8" ] || [ "$8" = "0" ]; then echo "FAIL|$3|$4|$2|$5|NO_IP" > "$outfile"; return; fi
-  local -a args=(-n "-${1}" -T -p "$7" -q 1 -w 2 -m 24 "$8" 44); local output=$(traceroute "${args[@]}" 2>&1 || true)
-  { printf "# %s|%s\n" "$3" "$4"; echo "$output"; } > "$trace_file"
-  if extract_trace_ips "$trace_file" | grep -q .; then echo "TRACE|$3|$4|$2|$5|$6" > "$outfile"; else echo "FAIL|$3|$4|$2|$5|TIMEOUT" > "$outfile"; fi
+  local family="$1" proto="$2" prov="$3" isp="$4" host="$5" idx="$6" port="$7" ip="$8" prefix="$9"
+  local outfile="${RESULT_DIR}/${prefix}_${idx}"; local trace_file="${RESULT_DIR}/${prefix}_trace_${idx}"
+  if [ -z "$ip" ] || [ "$ip" = "0" ]; then echo "FAIL|$family|$prov|$isp|$proto|$host|NO_IP" > "$outfile"; return; fi
+  local -a args=(-n "-${family}" -T -p "$port" -q 1 -w 2 -m 24 "$ip" 44)
+  local output=$(traceroute "${args[@]}" 2>&1 || true)
+  { printf "# %s|%s\n" "$prov" "$isp"; echo "$output"; } > "$trace_file"
+  if extract_trace_ips "$trace_file" | grep -q .; then 
+    echo "TRACE|$family|$prov|$isp|$proto|$host|$idx" > "$outfile"
+  else 
+    echo "FAIL|$family|$prov|$isp|$proto|$host|TIMEOUT" > "$outfile"
+  fi
 }
 
+# 🌟 在后台回程拼装流中，保留并倾倒 family 字段进最终全局缓存 route_map.txt
 run_bg_route_detection() {
   local idx=0; local r_raw="$RESULT_DIR/r_raw.txt"; local ip_f="$RESULT_DIR/r_ips.txt"; local cym_f="$RESULT_DIR/r_cym.txt"; local amap_f="$RESULT_DIR/r_amap.txt"
   for node_entry in "${POLL_QUEUE[@]}"; do
@@ -204,13 +213,15 @@ run_bg_route_detection() {
   done; sort -u "$ip_f" -o "$ip_f" 2>/dev/null || true
   if [ -s "$ip_f" ]; then query_cymru_asn "$ip_f" "$cym_f"; build_asn_map "$cym_f" "$amap_f"; fi
   if [ -f "$r_raw" ]; then
-    while IFS='|' read -r status prov isp protocol host value; do
+    while IFS='|' read -r status family prov isp protocol host value; do
       if [ -f "$RESULT_DIR" ] || [ -d "$RESULT_DIR" ]; then
         if [ "$status" = "TRACE" ] && [ -f "${RESULT_DIR}/bgroute_trace_${value}" ]; then
           extract_trace_ips "${RESULT_DIR}/bgroute_trace_${value}" > "${RESULT_DIR}/bgroute_trace_${value}.ips"
           local label=$(route_label_from_ip_trace "${RESULT_DIR}/bgroute_trace_${value}" "$amap_f" "${RESULT_DIR}/bgroute_trace_${value}.ips" "$isp")
-          echo "OK|$prov|$isp|tcp|$host|$label" >> "$RESULT_DIR/route_map.txt"
-        else echo "FAIL|$prov|$isp|tcp|$host|普通线路" >> "$RESULT_DIR/route_map.txt"; fi
+          echo "OK|$family|$prov|$isp|tcp|$host|$label" >> "$RESULT_DIR/route_map.txt"
+        else 
+          echo "FAIL|$family|$prov|$isp|tcp|$host|普通线路" >> "$RESULT_DIR/route_map.txt"
+        fi
       fi
     done < "$r_raw"
   fi; rm -f "$r_raw" "$ip_f" "$cym_f" "$amap_f" 2>/dev/null || true
@@ -218,8 +229,8 @@ run_bg_route_detection() {
 
 # ===================== 💎 【自适应对齐画布重组中心】 =====================
 show_provider_summary() {
-  local file="$1"; local route_file="${2:-/dev/null}"
-  awk -F'|' -v green="$GREEN" -v yellow="$YELLOW" -v red="$RED" -v cyan="$CYAN" -v white="$WHITE" -v dim="$DIM" -v bold="$BOLD" -v nc="$NC" '
+  local file="$1"; local route_file="${2:-/dev/null}"; local target_fam="${3:-4}"
+  awk -F'|' -v green="$GREEN" -v yellow="$YELLOW" -v red="$RED" -v cyan="$CYAN" -v white="$WHITE" -v dim="$DIM" -v bold="$BOLD" -v nc="$NC" -v tfam="$target_fam" '
   BEGIN { g_len = length("国"); }
   
   function pad_custom(text, total_w,   w, i, c, pad) {
@@ -243,7 +254,13 @@ show_provider_summary() {
     return val;
   }
   
-  FILENAME == ARGV[1] && NF >= 6 { if ($1 == "OK") route[$2 SUBSEP $3] = $6; else route[$2 SUBSEP $3] = ""; next }
+  # 🌟 渲染匹配时，强制比对第二个字段 tfam 栈秘钥！非当前栈的覆盖流直接就地隔离拦截 
+  FILENAME == ARGV[1] && NF >= 7 { 
+    if ($2 == tfam) {
+      if ($1 == "OK") route[$3 SUBSEP $4] = $7; else route[$3 SUBSEP $4] = ""; 
+    }
+    next 
+  }
   {
     status=$1; prov=$2; isp=$3; sent=$6; loss=$8; lat=$9; label = ((prov SUBSEP isp) in route) ? route[prov SUBSEP isp] : "";
     if (!(prov in seen)) { seen[prov] = 1; order[++n] = prov; }
@@ -261,7 +278,7 @@ show_provider_summary() {
     c1 = sprintf("%11s%s%12s", "", "电信", "");
     c2 = sprintf("%11s%s%12s", "", "联通", "");
     c3 = sprintf("%11s%s%12s", "", "移动", "");
-    printf "  %s%s%s%s  %s / %s / %s\033[K\n", bold, cyan, pad_custom("三网概览", 12), nc, cyan c1 nc, cyan c2 nc, cyan c3 nc
+    printf "  %s%s%s%s  %s / %s / %s\033[K\n", bold, cyan, pad_custom("三网看板", 12), nc, cyan c1 nc, cyan c2 nc, cyan c3 nc
     for (i = 1; i <= n; i++) { 
       prov = order[i]; 
       if (prov == "") continue;
@@ -273,7 +290,10 @@ show_provider_summary() {
 
 show_family_results() {
   awk -F'|' -v fam="$1" 'BEGIN { z=0; y=0; h=0; } { if ($1 == "OK") { v = int($8 + 0); if (v == 0) z++; else if (v <= 20) y++; else h++; } else if ($1 == "FAIL") { h++; } } END { printf "  \033[1m\033[0;36m%s 统计摘要\033[0m  \033[0;32m零丢包: %d\033[0m    \033[0;33m1-20%%: %d\033[0m    \033[0;31m>20%%: %d\033[0m\033[K\n\n", fam, z, y, h }' "$2"
-  show_provider_summary "$2" "$3"
+  # 🌟 向下游渲染引擎精准传递 4 或 6 的单栈过滤标签
+  local f_num="4"
+  if [ "$1" = "IPv6" ]; then f_num="6"; fi
+  show_provider_summary "$2" "$3" "$f_num"
 }
 
 # ===================== 💎 【特种 DPI 指纹伪装生存探针】 =====================
@@ -334,7 +354,6 @@ probe_nping_prewarm() {
   fi
 }
 
-# 🌟【解包重构】：完美兼容 -t 参数接收
 parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -419,17 +438,16 @@ redraw_dashboard() {
     run_time="${total_secs}秒"
   fi
 
-  # 🌟【定时看板状态条】：直观显示距离关停剩余的时间
   local time_bar=""
   if [ "$TOTAL_TIMEOUT" -gt 0 ]; then
     local remain=$(( TOTAL_TIMEOUT - total_secs ))
     [ "$remain" -lt 0 ] && remain=0
-    time_bar=" | ${YELLOW}沙盒自动安全关停剩余: ${remain}秒${NC}"
+    time_bar=" | ${YELLOW}自动关停倒计时: ${remain}秒${NC}"
   else
-    time_bar=" | ${GREEN}策略: 永续不限时运行看板${NC}"
+    time_bar=" | ${GREEN}策略: 永续看板模式${NC}"
   fi
 
-  echo -e "${BOLD}${CYAN}TcpQuality 画布 持续滚动监测脚本 (多进程解耦异步安全版) ${NC}\033[K"
+  echo -e "${BOLD}${CYAN} TcpQuality Canvas 监测脚本 默认定时120秒熔断 ${NC}\033[K"
   echo -e "${DIM}------------------------------------------------------------${NC}\033[K"
   echo -e "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST (北京时间)')\033[K"
   echo -e "运行时间：${BOLD}${GREEN}已运行 ${run_time}${NC}${time_bar}\033[K"
@@ -450,8 +468,6 @@ main() {
   init_privilege; require_raw_socket_privilege; check_curl; require_remote_nodes; check_nping; check_traceroute; detect_ip_stack
   
   local -a families=()
-  # 🌟【100%全系统兼容自愈】：不再依靠不稳定的网卡前置复核。
-  # 默认不传参数时直接灌入双栈由预热组件在 0 秒内自适应大扫除，终结无法启动的死锁。
   if [ "$ONLY_IPV4" -eq 1 ]; then
     families+=(4)
   elif [ "$ONLY_IPV6" -eq 1 ]; then
@@ -608,11 +624,10 @@ main() {
     ) &
   done
 
-  # 🌟【智能循环】：加入时钟断流安全裁决器
+  # 智能循环
   while true; do
     redraw_dashboard
     
-    # 🌟【定时停止逻辑闭环】：当 TOTAL_TIMEOUT 大于 0 且 SECONDS（Bash内置运行计时器）跑满时，安全熔断退出
     if [ "$TOTAL_TIMEOUT" -gt 0 ] && [ "$SECONDS" -ge "$TOTAL_TIMEOUT" ]; then
       echo -e "\n${GREEN}[i] 看板已达到设定的运行时间 (${TOTAL_TIMEOUT}秒)，自动触发安全熔断退出。${NC}"
       cleanup_all_processes
