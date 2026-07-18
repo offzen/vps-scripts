@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# TcpQuality 节点 TCP 丢包持续滚动监测脚本 (表头错位修复与像素级高保真版)
+# TcpQuality 节点 TCP 丢包持续滚动监测脚本 (智能双栈分时轮播)
 #
 
 set -e
@@ -170,7 +170,7 @@ route_trace_one() {
 
 run_bg_route_detection() {
   local idx=0; local r_raw="$RESULT_DIR/r_raw.txt"; local ip_f="$RESULT_DIR/r_ips.txt"; local cym_f="$RESULT_DIR/r_cym.txt"; local amap_f="$RESULT_DIR/r_amap.txt"
-  for node_entry in "${POLL_QUEUE[@]}"; do
+  for node_entry in "${NODES_QUEUE[@]}"; do
     IFS='|' read -r family prov isp host fixed_ip port b_host b_ip b_port <<< "$node_entry"
     idx=$((idx + 1))
     while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge 2 ]; do sleep 0.5; done
@@ -193,7 +193,6 @@ run_bg_route_detection() {
   fi; rm -f "$r_raw" "$ip_f" "$cym_f" "$amap_f"
 }
 
-# ===================== 💎 【高保真高精确度】全新表格矩阵对齐引擎 =====================
 show_provider_summary() {
   local file="$1"; local route_file="${2:-/dev/null}"
   awk -F'|' -v green="$GREEN" -v yellow="$YELLOW" -v red="$RED" -v cyan="$CYAN" -v white="$WHITE" -v dim="$DIM" -v bold="$BOLD" -v nc="$NC" '
@@ -201,43 +200,30 @@ show_provider_summary() {
   function display_width(text) { if (text == "黑龙江" || text == "内蒙古") return 6; return 4; }
   function label_cell(text, pad) { pad = label_w - display_width(text); return text sprintf("%*s", (pad<0?0:pad), ""); }
   function route_label(prov, isp) { return ((prov SUBSEP isp) in route) ? route[prov SUBSEP isp] : "" }
-  
-  # 🌟【补白对齐算法核心】：将单格列阵写死为绝对物理 28 字符宽度，加入 (发包轮次)
   function format_summary_cell(label, latency, loss, sent, lat_c, loss_c) {
     if (label == "Hidden" || label == "") label = "      ";
-    lbl_part  = sprintf("%-6s", label);
-    lat_part  = sprintf("%-6s", latency);
-    loss_part = sprintf("%-8s", loss);
-    sent_part = (sent == "" || sent == "-") ? "     " : sprintf("(%-3d)", sent);
-    return white lbl_part nc " " lat_c lat_part nc " " loss_c loss_part nc dim sent_part nc;
+    return white sprintf("%-11s", label) nc " " lat_c sprintf("%-6s", latency) nc " " loss_c sprintf("%-8s", loss) nc dim sprintf("(%-3d)", sent) nc;
   }
-  
   FILENAME == ARGV[1] && NF >= 6 { if ($1 == "OK") route[$2 SUBSEP $3] = $6; else route[$2 SUBSEP $3] = ""; next }
   {
     status=$1; prov=$2; isp=$3; sent=$6; loss=$8; lat=$9; label = route_label(prov, isp);
     if (!(prov in seen)) { seen[prov] = 1; order[++n] = prov; }
     if (status == "OFFLINE") {
-      data[prov SUBSEP isp] = format_summary_cell(label, "  -  ", "  -  ", "-", dim, dim);
+      data[prov SUBSEP isp] = format_summary_cell(label, "  -  ", "  -  ", 0, dim, dim);
     } else if (status == "FAIL") {
       data[prov SUBSEP isp] = format_summary_cell(label, "failed", "failed", sent, red, red);
     } else {
-      lat_text = sprintf("%.0fms", lat);
-      loss_text = sprintf("%.2f%%", loss); # 🌟 强制解封两位高精浮点丢包率
+      lat_text = sprintf("%.0fms", lat); loss_text = sprintf("%.2f%%", loss);
       lc = (loss+0 > 20)?red:((loss+0 > 0)?yellow:green); ptc = (lat+0 > 240)?red:((lat+0 > 150)?yellow:green);
       data[prov SUBSEP isp] = format_summary_cell(label, lat_text, loss_text, sent, ptc, lc);
     }
   }
   END {
-    # 🌟【修复核心】：修正占位符错位，精准契合下方数据行 28 位物理宽度的间距对齐
-    c1 = sprintf("%12s%s%12s", "", "电信", "");
-    c2 = sprintf("%12s%s%12s", "", "联通", "");
-    c3 = sprintf("%12s%s%12s", "", "移动", "");
+    c1 = sprintf("%13s%s%12s", "", "电信", "");
+    c2 = sprintf("%13s%s%12s", "", "联通", "");
+    c3 = sprintf("%13s%s%12s", "", "移动", "");
     printf "  %s%s%s%s  %s / %s / %s\n", bold, cyan, label_cell("三网概览"), nc, cyan c1 nc, cyan c2 nc, cyan c3 nc
-    
-    for (i = 1; i <= n; i++) {
-      prov = order[i];
-      printf "  %s%s%s  %s / %s / %s\n", cyan, label_cell(prov), nc, data[prov SUBSEP "电信"], data[prov SUBSEP "联通"], data[prov SUBSEP "移动"]
-    }
+    for (i = 1; i <= n; i++) { prov = order[i]; printf "  %s%s%s  %s / %s / %s\n", cyan, label_cell(prov), nc, data[prov SUBSEP "电信"], data[prov SUBSEP "联通"], data[prov SUBSEP "移动"] }
     printf "  %s颜色: %s正常%s  %s延迟151-240ms或有丢包%s  %s延迟>240ms或大范围丢包%s\n\n", dim, green, dim, yellow, dim, red, dim
   }' "$route_file" "$file"
 }
@@ -281,6 +267,7 @@ declare -A CUM_RCVD
 declare -A CUM_LAT_SUM
 declare -A NODE_ACTIVE
 
+# ===================== 💎 【核心升级】：双栈分时轮播看盘渲染引擎 =====================
 redraw_dashboard() {
   local snap_v4=$(mktemp); local snap_v6=$(mktemp)
   for key in "${!CUM_SENT[@]}"; do
@@ -294,18 +281,33 @@ redraw_dashboard() {
     local line="$status|$f_prov|$f_isp|host|ip|$sent|$rcvd|$loss_pct|$avg_lat"
     if [ "$family" = "4" ]; then echo "$line" >> "$snap_v4"; else echo "$line" >> "$snap_v6"; fi
   done
+
+  # ANSI 命令原地重绘
   printf "\033[H\033[J"
   local r_status="${YELLOW}后台回程精准识别中 (请稍候...)${NC}"; local r_file="$RESULT_DIR/route_map.txt"
   if [ -s "$r_file" ]; then r_status="${GREEN}回程识别已就绪 (表格内已自动切换对应线路分类)${NC}"; else r_file="/dev/null"; fi
   
-  echo -e "${BOLD}${CYAN}TcpQuality画布${NC}"
+  echo -e "${BOLD}${CYAN}TcpQuality 画布${NC}"
   echo -e "${DIM}------------------------------------------------------------${NC}"
   echo -e "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST (北京时间)')"
-  echo -e "当前周期：${BOLD}${YELLOW}第 $ROUND_COUNT 轮全面盘点${NC} | 策略: 线性低频匀速错峰"
+  
+  # 🌟【动态视窗控制】：如果双栈文件同时存在，开启奇偶数轮次切换，完美解决垂直高度溢出
+  local view_mode="V4"
+  if [ -s "$snap_v4" ] && [ -s "$snap_v6" ]; then
+    if [ $((ROUND_COUNT % 2)) -eq 0 ]; then view_mode="V6"; else view_mode="V4"; fi
+    echo -e "当前周期：${BOLD}${YELLOW}第 $ROUND_COUNT 轮全面盘点${NC} | 智能双栈轮播: ${BOLD}${MAGENTA}IPv${view_mode}${NC} 看板 (每轮结束后交替切换)"
+  else
+    echo -e "当前周期：${BOLD}${YELLOW}第 $ROUND_COUNT 轮全面盘点${NC} | 策略: 线性低频匀速错峰"
+  fi
   echo -e "回程状态：$r_status\n"
   
-  if [ -s "$snap_v4" ]; then sort -t'|' -k2 "$snap_v4" -o "$snap_v4"; show_family_results "IPv4" "$snap_v4" "$r_file"; fi
-  if [ -s "$snap_v6" ]; then sort -t'|' -k2 "$snap_v6" -o "$snap_v6"; show_family_results "IPv6" "$snap_v6" "$r_file"; fi
+  if [ "$view_mode" = "V4" ] && [ -s "$snap_v4" ]; then 
+    sort -t'|' -k2 "$snap_v4" -o "$snap_v4"
+    show_family_results "IPv4" "$snap_v4" "$r_file"
+  elif [ "$view_mode" = "V6" ] && [ -s "$snap_v6" ]; then
+    sort -t'|' -k2 "$snap_v6" -o "$snap_v6"
+    show_family_results "IPv6" "$snap_v6" "$r_file"
+  fi
   rm -f "$snap_v4" "$snap_v6"
 }
 
@@ -334,11 +336,12 @@ main() {
   done
   if [ ${#NODES_QUEUE[@]} -eq 0 ]; then echo -e "${RED}[X] 错误：未在当前本地堆栈中找到任何可执行的监测节点${NC}"; exit 1; fi
 
+  # 多线程高并发预检筛选引擎
   echo -e "${CYAN}[i] 正在执行多线程节点可用性预检筛选 (限制并发数: ${MAX_PREWARM_JOBS})...${NC}"
   local idx=0
   for node_entry in "${NODES_QUEUE[@]}"; do
     idx=$((idx + 1))
-    while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge "${MAX_PREWARM_JOBS:-30}" ]; do
+    while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$MAX_PREWARM_JOBS" ]; do
       local done_cnt=$(find "$RESULT_DIR" -maxdepth 1 -name "pre_done_*" 2>/dev/null | wc -l | tr -d ' ')
       echo -ne "\r  -> 正在并行测算及建立本地队列快照... ($done_cnt/${#NODES_QUEUE[@]})"
       sleep 0.05
@@ -346,9 +349,6 @@ main() {
     (
       IFS='|' read -r family prov isp host fixed_ip port b_host b_ip b_port <<< "$node_entry"
       local is_alive=0
-
-
-
       local res=$(probe_target "$family" "$family" "$prov" "$isp" "$host" "$fixed_ip" "$port")
       if [[ "$res" =~ ^OK ]]; then
         is_alive=1
@@ -359,8 +359,6 @@ main() {
       if [ "$is_alive" -eq 1 ]; then echo "$node_entry" > "$RESULT_DIR/pre_alive_${idx}"; fi
       touch "$RESULT_DIR/pre_done_${idx}"
     ) &
-
-
   done
 
   while [ "$(jobs -pr | wc -l | tr -d ' ')" -gt 0 ]; do
@@ -386,30 +384,24 @@ main() {
     for node_entry in "${POLL_QUEUE[@]}"; do
       IFS='|' read -r family prov isp host fixed_ip port b_host b_ip b_port <<< "$node_entry"
       local cache_key="$family|$prov|$isp"
-
-###### 1. 优先探测主 IP 的原厂指定端口（通常是 80）
+      
+      # 同 IP 智能端口自救退避算法
       local res=$(probe_target "$family" "$family" "$prov" "$isp" "$host" "$fixed_ip" "$port")
       local status r_prov r_isp r_host r_ip r_sent r_rcvd r_loss r_lat
       IFS='|' read -r status r_prov r_isp r_host r_ip r_sent r_rcvd r_loss r_lat <<< "$res"
-      
-      # 🌟【智能同 IP 端口退避】：如果主端口不通且原厂指定的是 80，原地自动改用 443 端口再自救一次
       if [ "$status" != "OK" ] && [ "$port" = "80" ]; then
         res=$(probe_target "$family" "$family" "$prov" "$isp" "$host" "$fixed_ip" "443")
         IFS='|' read -r status r_prov r_isp r_host r_ip r_sent r_rcvd r_loss r_lat <<< "$res"
       fi
-      
-      # 🌟【终极防线】：如果同 IP 双端口都绝望了，再触发备用 IP 的备用端口
       if [ "$status" != "OK" ] && [ -n "$b_ip" ]; then
         res=$(probe_target "$family" "$family" "$prov" "$isp" "$b_host" "$b_ip" "$b_port")
         IFS='|' read -r status r_prov r_isp r_host r_ip r_sent r_rcvd r_loss r_lat <<< "$res"
-        
-        # 备用 IP 如果配的也是 80 且挂了，同样自救改测 443
         if [ "$status" != "OK" ] && [ "$b_port" = "80" ]; then
           res=$(probe_target "$family" "$family" "$prov" "$isp" "$b_host" "$b_ip" "443")
           IFS='|' read -r status r_prov r_isp r_host r_ip r_sent r_rcvd r_loss r_lat <<< "$res"
         fi
       fi
-######
+      
       if [ "$status" = "OK" ] ; then NODE_ACTIVE["$cache_key"]=1; fi
       if [ "${NODE_ACTIVE["$cache_key"]:-0}" -eq 1 ]; then
         if [ "$status" = "OK" ] || [ "$status" = "FAIL" ]; then
