@@ -429,7 +429,7 @@ redraw_dashboard() {
     time_bar=" | ${GREEN}策略: 永续不限时运行看板${NC}"
   fi
 
-  echo -e "${BOLD}${CYAN}TcpQuality 画布 持续滚动监测脚本 (多进程解耦异步旗舰版) ${NC}\033[K"
+  echo -e "${BOLD}${CYAN}TcpQuality 画布 持续滚动监测脚本 (多进程解耦异步安全版) ${NC}\033[K"
   echo -e "${DIM}------------------------------------------------------------${NC}\033[K"
   echo -e "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST (北京时间)')\033[K"
   echo -e "运行时间：${BOLD}${GREEN}已运行 ${run_time}${NC}${time_bar}\033[K"
@@ -608,7 +608,7 @@ main() {
     ) &
   done
 
-  # 🌟【智能消费者大循环】：加入时钟断流安全裁决器
+  # 🌟【智能循环】：加入时钟断流安全裁决器
   while true; do
     redraw_dashboard
     
