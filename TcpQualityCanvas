@@ -181,12 +181,11 @@ route_label_from_ip_trace() {
   ' "$2" "$3" "$1"
 }
 
-# 🌟 将 IP 协议栈特征（$family）作为核心参数深度捆绑、写入临时原子文件
 route_trace_one() {
   local family="$1" proto="$2" prov="$3" isp="$4" host="$5" idx="$6" port="$7" ip="$8" prefix="$9"
   local outfile="${RESULT_DIR}/${prefix}_${idx}"; local trace_file="${RESULT_DIR}/${prefix}_trace_${idx}"
   if [ -z "$ip" ] || [ "$ip" = "0" ]; then echo "FAIL|$family|$prov|$isp|$proto|$host|NO_IP" > "$outfile"; return; fi
-  local -a args=(-n "-${family}" -T -p "$port" -q 1 -w 2 -m 24 "$ip" 44)
+  local -a args=(-n "-${family}" -T -p "$7" -q 1 -w 2 -m 24 "$ip" 44)
   local output=$(traceroute "${args[@]}" 2>&1 || true)
   { printf "# %s|%s\n" "$prov" "$isp"; echo "$output"; } > "$trace_file"
   if extract_trace_ips "$trace_file" | grep -q .; then 
@@ -196,7 +195,6 @@ route_trace_one() {
   fi
 }
 
-# 🌟 在后台回程拼装流中，保留并倾倒 family 字段进最终全局缓存 route_map.txt
 run_bg_route_detection() {
   local idx=0; local r_raw="$RESULT_DIR/r_raw.txt"; local ip_f="$RESULT_DIR/r_ips.txt"; local cym_f="$RESULT_DIR/r_cym.txt"; local amap_f="$RESULT_DIR/r_amap.txt"
   for node_entry in "${POLL_QUEUE[@]}"; do
@@ -254,7 +252,6 @@ show_provider_summary() {
     return val;
   }
   
-  # 🌟 渲染匹配时，强制比对第二个字段 tfam 栈秘钥！非当前栈的覆盖流直接就地隔离拦截 
   FILENAME == ARGV[1] && NF >= 7 { 
     if ($2 == tfam) {
       if ($1 == "OK") route[$3 SUBSEP $4] = $7; else route[$3 SUBSEP $4] = ""; 
@@ -290,7 +287,6 @@ show_provider_summary() {
 
 show_family_results() {
   awk -F'|' -v fam="$1" 'BEGIN { z=0; y=0; h=0; } { if ($1 == "OK") { v = int($8 + 0); if (v == 0) z++; else if (v <= 20) y++; else h++; } else if ($1 == "FAIL") { h++; } } END { printf "  \033[1m\033[0;36m%s 统计摘要\033[0m  \033[0;32m零丢包: %d\033[0m    \033[0;33m1-20%%: %d\033[0m    \033[0;31m>20%%: %d\033[0m\033[K\n\n", fam, z, y, h }' "$2"
-  # 🌟 向下游渲染引擎精准传递 4 或 6 的单栈过滤标签
   local f_num="4"
   if [ "$1" = "IPv6" ]; then f_num="6"; fi
   show_provider_summary "$2" "$3" "$f_num"
@@ -307,7 +303,7 @@ probe_socket_l4() {
   
   raw=$(curl -s -o /dev/null -k -m 2.5 --connect-timeout 2.5 -A "$user_agent" -w "%{http_code}|%{time_connect}" "$proto://$url_ip:$port/" 2>/dev/null) || exit_code=$?
   
-  if [ "$exit_code" -eq 0 ]; then
+  if [ "${exit_code:-0}" -eq 0 ]; then
     IFS='|' read -r http_code t_connect <<< "$raw"
     http_code=$((http_code + 0))
   else
@@ -316,19 +312,19 @@ probe_socket_l4() {
   fi
   
   local is_ok=0
-  if [ "$exit_code" -eq 0 ] || [ "$exit_code" -eq 52 ] || [ "$exit_code" -eq 56 ] || [ "$exit_code" -eq 35 ] || [ "$http_code" -gt 0 ]; then
+  # 🌟【整型健壮加固】：强制注入 ${VAR:-0} 原生默认保底值，绝不给强杀瞬间留下空字符整型崩溃的盲区
+  if [ "${exit_code:-0}" -eq 0 ] || [ "${exit_code:-0}" -eq 52 ] || [ "${exit_code:-0}" -eq 56 ] || [ "${exit_code:-0}" -eq 35 ] || [ "${http_code:-0}" -gt 0 ]; then
     is_ok=1
   fi
   
   if [ "$is_ok" -eq 1 ]; then
-    if [[ "$t_connect" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
-      local sec="${BASH_REMATCH[1]}"
-      local fra="${BASH_REMATCH[2]}000"
-      fra="${fra:0:3}"
-      local int_rtt=$(( 10#$sec * 1000 + 10#$fra ))
-    else
-      local int_rtt=0
-    fi
+    t_connect="${t_connect//[[:space:]]/}"
+    local sec="${t_connect%%.*}"
+    local fra="${t_connect#*.}"
+    fra="${fra}000"
+    fra="${fra:0:3}"
+    local int_rtt=$(( 10#${sec:-0} * 1000 + 10#${fra:-0} ))
+    
     echo "OK|$prov|$isp|$host|$ip|1|1|0.00|$int_rtt"
   else
     echo "FAIL|$prov|$isp|$host|$ip|1|0|100.00|0"
@@ -344,8 +340,8 @@ probe_nping_prewarm() {
   if [[ "$raw" =~ sent:[[:space:]]*([0-9]+) ]]; then one_sent="${BASH_REMATCH[1]}"; fi
   if [[ "$raw" =~ Rcvd:[[:space:]]*([0-9]+) ]]; then one_rcvd="${BASH_REMATCH[1]}"; fi
   if [[ "$raw" =~ Avg[[:space:]]rtt:[[:space:]]*([0-9.]+) ]]; then one_rtt="${BASH_REMATCH[1]}"; fi
-  if [ "$one_rcvd" -gt "$one_sent" ]; then one_rcvd=$one_sent; fi
-  if [ "$one_rcvd" -gt 0 ] && [[ "$one_rtt" != "0" && "$one_rtt" != "0.00" ]]; then
+  if [ "${one_rcvd:-0}" -gt "${one_sent:-1}" ]; then one_rcvd=$one_sent; fi
+  if [ "${one_rcvd:-0}" -gt 0 ] && [[ "$one_rtt" != "0" && "$one_rtt" != "0.00" ]]; then
     local msec=0
     if [[ "$one_rtt" =~ ([0-9]+) ]]; then msec=$(( 10#${BASH_REMATCH[1]} )); fi
     echo "OK|$prov|$isp|$host|$ip|$one_sent|$one_rcvd|0.00|$msec"
@@ -439,7 +435,7 @@ redraw_dashboard() {
   fi
 
   local time_bar=""
-  if [ "$TOTAL_TIMEOUT" -gt 0 ]; then
+  if [ "${TOTAL_TIMEOUT:-0}" -gt 0 ]; then
     local remain=$(( TOTAL_TIMEOUT - total_secs ))
     [ "$remain" -lt 0 ] && remain=0
     time_bar=" | ${YELLOW}自动关停倒计时: ${remain}秒${NC}"
@@ -447,7 +443,7 @@ redraw_dashboard() {
     time_bar=" | ${GREEN}策略: 永续看板模式${NC}"
   fi
 
-  echo -e "${BOLD}${CYAN} TcpQuality Canvas 监测脚本 默认定时120秒熔断 ${NC}\033[K"
+  echo -e "${BOLD}${CYAN}TcpQuality Canvas 监测脚本 默认定时120秒熔断${NC}\033[K"
   echo -e "${DIM}------------------------------------------------------------${NC}\033[K"
   echo -e "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST (北京时间)')\033[K"
   echo -e "运行时间：${BOLD}${GREEN}已运行 ${run_time}${NC}${time_bar}\033[K"
@@ -468,9 +464,9 @@ main() {
   init_privilege; require_raw_socket_privilege; check_curl; require_remote_nodes; check_nping; check_traceroute; detect_ip_stack
   
   local -a families=()
-  if [ "$ONLY_IPV4" -eq 1 ]; then
+  if [ "${ONLY_IPV4:-0}" -eq 1 ]; then
     families+=(4)
-  elif [ "$ONLY_IPV6" -eq 1 ]; then
+  elif [ "${ONLY_IPV6:-0}" -eq 1 ]; then
     families+=(6)
   else
     families=(4 6)
@@ -495,7 +491,7 @@ main() {
   for node_entry in "${NODES_QUEUE[@]}"; do
     local current_jobs=$(jobs -pr | wc -l | tr -cd '0-9'); current_jobs=${current_jobs:-0}
 
-    while [ "$current_jobs" -ge "$limit_jobs" ]; do
+    while [ "${current_jobs:-0}" -ge "$limit_jobs" ]; do
       local done_cnt=$(find "$RESULT_DIR" -maxdepth 1 -name "pre_done_*" 2>/dev/null | wc -l | tr -cd '0-9')
       echo -ne "\r  -> 正在并行测算及建立本地队列快照... (${done_cnt:-0}/${#NODES_QUEUE[@]})"
       sleep 0.05
@@ -505,6 +501,7 @@ main() {
     IFS='|' read -r family prov isp host fixed_ip port rest <<< "$node_entry"
     local k="${family}_${prov}_${isp}"
     
+    # 🌟【全量静音加固】：为预热等子进程块加挂保底 2>/dev/null & 确保极端微型容器绝无内存泄漏污染
     (
       trap 'touch "$RESULT_DIR/pre_done_${k}"' EXIT
       IFS='|' read -r family prov isp host fixed_ip port b_host b_ip b_port <<< "$node_entry"
@@ -519,7 +516,7 @@ main() {
         echo "$family|$prov|$isp|$host|$fixed_ip|$port|CURL" > "$RESULT_DIR/pre_alive_${k}"
         echo "$res" > "$RESULT_DIR/pre_res_${k}"; exit 0
       fi
-      if [ "$port" = "80" ]; then
+      if [ "${port:-80}" -eq 80 ]; then
         res=$(probe_nping_prewarm "$family" "$prov" "$isp" "$host" "$fixed_ip" "443")
         if [[ "$res" =~ ^OK ]]; then
           echo "$family|$prov|$isp|$host|$fixed_ip|443|NPING" > "$RESULT_DIR/pre_alive_${k}"
@@ -543,11 +540,11 @@ main() {
           echo "$res" > "$RESULT_DIR/pre_res_${k}"; exit 0
         fi
       fi
-    ) &
+    ) 2>/dev/null &
   done
 
   local current_jobs=$(jobs -pr | wc -l | tr -cd '0-9'); current_jobs=${current_jobs:-0}
-  while [ "$current_jobs" -gt 0 ]; do
+  while [ "${current_jobs:-0}" -gt 0 ]; do
     local done_cnt=$(find "$RESULT_DIR" -maxdepth 1 -name "pre_done_*" 2>/dev/null | wc -l | tr -cd '0-9')
     echo -ne "\r  -> 正在并行测算及建立本地队列快照... (${done_cnt:-0}/${#NODES_QUEUE[@]})"
     sleep 0.05
@@ -571,12 +568,14 @@ main() {
   if [ ${#POLL_QUEUE[@]} -eq 0 ]; then echo -e "\n${RED}[X] 错误熔断：预检筛选可用活节点数为 0！${NC}"; exit 1; fi
   echo -e "\n${GREEN}[√] 预检筛选完成！看板画布正在载入...${NC}\n"; sleep 0.5
 
-  run_bg_route_detection &
+  # 🌟【全量静音加固】：后台异步回程检测通道合并 2>/dev/null，掐灭临终前的 trace 垃圾回包
+  run_bg_route_detection 2>/dev/null &
   
   # ===================== 💎 【多进程生产者集群（Producers）】 =====================
   local pre_idx=0
   for node_entry in "${POLL_QUEUE[@]}"; do
     pre_idx=$((pre_idx + 1))
+    # 🌟【全量静音加固】：把 2>/dev/null 锁死在后台 subshell 的括号边缘。当 kill -9 降临时，任凭其发生何种竞争，全部静音消亡，零污染秒回提示符
     (
       set +e
       
@@ -621,14 +620,14 @@ main() {
         fi
         echo "$s_sent|$s_rcvd|$s_lat_sum" > "$stat_file"
       done
-    ) &
+    ) 2>/dev/null &
   done
 
-  # 智能循环
+  # 消费大循环
   while true; do
     redraw_dashboard
     
-    if [ "$TOTAL_TIMEOUT" -gt 0 ] && [ "$SECONDS" -ge "$TOTAL_TIMEOUT" ]; then
+    if [ "${TOTAL_TIMEOUT:-0}" -gt 0 ] && [ "${SECONDS:-0}" -ge "${TOTAL_TIMEOUT:-0}" ]; then
       echo -e "\n${GREEN}[i] 看板已达到设定的运行时间 (${TOTAL_TIMEOUT}秒)，自动触发安全熔断退出。${NC}"
       cleanup_all_processes
     fi
