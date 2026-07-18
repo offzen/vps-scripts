@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# TcpQuality 节点 TCP 丢包持续滚动监测脚本 (智能双栈分时轮播)
+# TcpQuality 画布（双栈分时轮播版)
 #
 
 set -e
 
 # ===================== 全局配置区（手动调速参数） =====================
 DEFAULT_PORT="80"   # 默认全局缺省端口
-NODE_DELAY=0.05     # 监控运行中，节点之间的流水线错峰延时（秒）
-MAX_PREWARM_JOBS=30 # 启动时预检的最大并发线程数（建议 30-50）
+NODE_DELAY=0.01     # 🌟【急速安全区】节点交替错峰延时（10ms，2分钟跑完100轮）
+MAX_PREWARM_JOBS=40 # 启动时预检的最大并发线程数（建议 30-50）
 # =====================================================================
 
 # ===================== NixOS 临时运行环境 =====================
@@ -170,7 +170,7 @@ route_trace_one() {
 
 run_bg_route_detection() {
   local idx=0; local r_raw="$RESULT_DIR/r_raw.txt"; local ip_f="$RESULT_DIR/r_ips.txt"; local cym_f="$RESULT_DIR/r_cym.txt"; local amap_f="$RESULT_DIR/r_amap.txt"
-  for node_entry in "${NODES_QUEUE[@]}"; do
+  for node_entry in "${POLL_QUEUE[@]}"; do
     IFS='|' read -r family prov isp host fixed_ip port b_host b_ip b_port <<< "$node_entry"
     idx=$((idx + 1))
     while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge 2 ]; do sleep 0.5; done
@@ -193,6 +193,7 @@ run_bg_route_detection() {
   fi; rm -f "$r_raw" "$ip_f" "$cym_f" "$amap_f"
 }
 
+# ===================== 💎 【原地高精度过写】终端零闪烁重绘引擎 =====================
 show_provider_summary() {
   local file="$1"; local route_file="${2:-/dev/null}"
   awk -F'|' -v green="$GREEN" -v yellow="$YELLOW" -v red="$RED" -v cyan="$CYAN" -v white="$WHITE" -v dim="$DIM" -v bold="$BOLD" -v nc="$NC" '
@@ -222,14 +223,15 @@ show_provider_summary() {
     c1 = sprintf("%13s%s%12s", "", "电信", "");
     c2 = sprintf("%13s%s%12s", "", "联通", "");
     c3 = sprintf("%13s%s%12s", "", "移动", "");
-    printf "  %s%s%s%s  %s / %s / %s\n", bold, cyan, label_cell("三网概览"), nc, cyan c1 nc, cyan c2 nc, cyan c3 nc
-    for (i = 1; i <= n; i++) { prov = order[i]; printf "  %s%s%s  %s / %s / %s\n", cyan, label_cell(prov), nc, data[prov SUBSEP "电信"], data[prov SUBSEP "联通"], data[prov SUBSEP "移动"] }
-    printf "  %s颜色: %s正常%s  %s延迟151-240ms或有丢包%s  %s延迟>240ms或大范围丢包%s\n\n", dim, green, dim, yellow, dim, red, dim
+    # 🌟【注入 \033[K 杀招】：每打印完一行都在末尾进行硬件级行尾擦除，防留残影
+    printf "  %s%s%s%s  %s / %s / %s\033[K\n", bold, cyan, label_cell("三网概览"), nc, cyan c1 nc, cyan c2 nc, cyan c3 nc
+    for (i = 1; i <= n; i++) { prov = order[i]; printf "  %s%s%s  %s / %s / %s\033[K\n", cyan, label_cell(prov), nc, data[prov SUBSEP "电信"], data[prov SUBSEP "联通"], data[prov SUBSEP "移动"] }
+    printf "  %s颜色: %s正常%s  %s延迟151-240ms或有丢包%s  %s延迟>240ms或大范围丢包%s\033[K\n\n", dim, green, dim, yellow, dim, red, dim
   }' "$route_file" "$file"
 }
 
 show_family_results() {
-  awk -F'|' -v fam="$1" 'BEGIN { z=0; y=0; h=0; } { if ($1 == "OK") { v = int($8 + 0); if (v == 0) z++; else if (v <= 20) y++; else h++; } else if ($1 == "FAIL") { h++; } } END { printf "  \033[1m\033[0;36m%s 统计摘要\033[0m  \033[0;32m零丢包: %d\033[0m    \033[0;33m1-20%%: %d\033[0m    \033[0;31m>20%%: %d\033[0m\n\n", fam, z, y, h }' "$2"
+  awk -F'|' -v fam="$1" 'BEGIN { z=0; y=0; h=0; } { if ($1 == "OK") { v = int($8 + 0); if (v == 0) z++; else if (v <= 20) y++; else h++; } else if ($1 == "FAIL") { h++; } } END { printf "  \033[1m\033[0;36m%s 统计摘要\033[0m  \033[0;32m零丢包: %d\033[0m    \033[0;33m1-20%%: %d\033[0m    \033[0;31m>20%%: %d\033[0m\033[K\n\n", fam, z, y, h }' "$2"
   show_provider_summary "$2" "$3"
 }
 
@@ -266,8 +268,8 @@ declare -A CUM_SENT
 declare -A CUM_RCVD
 declare -A CUM_LAT_SUM
 declare -A NODE_ACTIVE
+LAST_VIEW_MODE=""  # 用于拦截切卡的一体化缓存状态锁
 
-# ===================== 💎 【核心升级】：双栈分时轮播看盘渲染引擎 =====================
 redraw_dashboard() {
   local snap_v4=$(mktemp); local snap_v6=$(mktemp)
   for key in "${!CUM_SENT[@]}"; do
@@ -282,24 +284,34 @@ redraw_dashboard() {
     if [ "$family" = "4" ]; then echo "$line" >> "$snap_v4"; else echo "$line" >> "$snap_v6"; fi
   done
 
-  # ANSI 命令原地重绘
-  printf "\033[H\033[J"
+  # 🌟【平滑轮播控制中心】：使用 Bash 软时钟（$SECONDS），每 6 秒平稳切一次网络。
+  local view_mode="V4"
+  if [ -s "$snap_v4" ] && [ -s "$snap_v6" ]; then
+    if [ $((SECONDS / 6 % 2)) -eq 0 ]; then view_mode="V4"; else view_mode="V6"; fi
+  fi
+
+  # 🌟【零闪烁核心守护】：只有在 V4/V6 切卡的瞬间才允许清屏（\033[J），日常刷新强制使用光标原地复位（\033[H）！
+  if [ "$view_mode" != "$LAST_VIEW_MODE" ]; then
+    printf "\033[H\033[J"
+    LAST_VIEW_MODE="$view_mode"
+  else
+    printf "\033[H"
+  fi
+  
   local r_status="${YELLOW}后台回程精准识别中 (请稍候...)${NC}"; local r_file="$RESULT_DIR/route_map.txt"
   if [ -s "$r_file" ]; then r_status="${GREEN}回程识别已就绪 (表格内已自动切换对应线路分类)${NC}"; else r_file="/dev/null"; fi
   
-  echo -e "${BOLD}${CYAN}TcpQuality 画布${NC}"
-  echo -e "${DIM}------------------------------------------------------------${NC}"
-  echo -e "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST (北京时间)')"
+  echo -e "${BOLD}${CYAN}TcpQuality TCP 重传检测--最贴近你上网的综合体验${NC}\033[K"
+  echo -e "${DIM}特价VPS补货TG频道：ibsgss | 感谢 Zstatic CDN 节点${NC}\033[K"
+  echo -e "${DIM}------------------------------------------------------------${NC}\033[K"
+  echo -e "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST (北京时间)')\033[K"
   
-  # 🌟【动态视窗控制】：如果双栈文件同时存在，开启奇偶数轮次切换，完美解决垂直高度溢出
-  local view_mode="V4"
   if [ -s "$snap_v4" ] && [ -s "$snap_v6" ]; then
-    if [ $((ROUND_COUNT % 2)) -eq 0 ]; then view_mode="V6"; else view_mode="V4"; fi
-    echo -e "当前周期：${BOLD}${YELLOW}第 $ROUND_COUNT 轮全面盘点${NC} | 智能双栈轮播: ${BOLD}${MAGENTA}IPv${view_mode}${NC} 看板 (每轮结束后交替切换)"
+    echo -e "当前周期：${BOLD}${YELLOW}第 $ROUND_COUNT 轮全面盘点${NC} | 智能分时静止看盘: ${BOLD}${MAGENTA}IPv${view_mode}${NC} 视图 (每 6 秒无缝平滑切卡)\033[K"
   else
-    echo -e "当前周期：${BOLD}${YELLOW}第 $ROUND_COUNT 轮全面盘点${NC} | 策略: 线性低频匀速错峰"
+    echo -e "当前周期：${BOLD}${YELLOW}第 $ROUND_COUNT 轮全面盘点${NC} | 策略: 线性低频匀速错峰\033[K"
   fi
-  echo -e "回程状态：$r_status\n"
+  echo -e "回程状态：$r_status\n\033[K"
   
   if [ "$view_mode" = "V4" ] && [ -s "$snap_v4" ]; then 
     sort -t'|' -k2 "$snap_v4" -o "$snap_v4"
@@ -337,11 +349,11 @@ main() {
   if [ ${#NODES_QUEUE[@]} -eq 0 ]; then echo -e "${RED}[X] 错误：未在当前本地堆栈中找到任何可执行的监测节点${NC}"; exit 1; fi
 
   # 多线程高并发预检筛选引擎
-  echo -e "${CYAN}[i] 正在执行多线程节点可用性预检筛选 (限制并发数: ${MAX_PREWARM_JOBS})...${NC}"
+  echo -e "${CYAN}[i] 正在执行多线程节点可用性预检筛选 (限制并发数: ${MAX_PREWARM_JOBS:-30})...${NC}"
   local idx=0
   for node_entry in "${NODES_QUEUE[@]}"; do
     idx=$((idx + 1))
-    while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$MAX_PREWARM_JOBS:-30}" ]; do
+    while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge "${MAX_PREWARM_JOBS:-30}" ]; do
       local done_cnt=$(find "$RESULT_DIR" -maxdepth 1 -name "pre_done_*" 2>/dev/null | wc -l | tr -d ' ')
       echo -ne "\r  -> 正在并行测算及建立本地队列快照... ($done_cnt/${#NODES_QUEUE[@]})"
       sleep 0.05
@@ -378,14 +390,16 @@ main() {
   sleep 0.5
 
   run_bg_route_detection &
+  
   ROUND_COUNT=0
+  UI_THROTTLE_COUNTER=0 # UI 刷新帧率限制计数器
+  
   while true; do
     ROUND_COUNT=$((ROUND_COUNT + 1))
     for node_entry in "${POLL_QUEUE[@]}"; do
       IFS='|' read -r family prov isp host fixed_ip port b_host b_ip b_port <<< "$node_entry"
       local cache_key="$family|$prov|$isp"
       
-      # 同 IP 智能端口自救退避算法
       local res=$(probe_target "$family" "$family" "$prov" "$isp" "$host" "$fixed_ip" "$port")
       local status r_prov r_isp r_host r_ip r_sent r_rcvd r_loss r_lat
       IFS='|' read -r status r_prov r_isp r_host r_ip r_sent r_rcvd r_loss r_lat <<< "$res"
@@ -410,8 +424,16 @@ main() {
           if [ "$status" = "OK" ] && [ "$r_rcvd" -gt 0 ]; then CUM_LAT_SUM["$cache_key"]=$(awk -v sum="${CUM_LAT_SUM["$cache_key"]:-0}" -v lat="$r_lat" 'BEGIN { print sum + lat }'); fi
         fi
       fi
-      redraw_dashboard; sleep "$NODE_DELAY"
+      
+      # 🌟【FPS 帧率拦截器】：每探测 8 个节点才向终端进行一次重绘渲染，彻底消灭高频撕裂闪烁
+      UI_THROTTLE_COUNTER=$((UI_THROTTLE_COUNTER + 1))
+      if [ $((UI_THROTTLE_COUNTER % 8)) -eq 0 ]; then
+        redraw_dashboard
+      fi
+      sleep "$NODE_DELAY"
     done
+    # 每一轮结束时强制兜底刷新一次，确保全局总数据完美对齐
+    redraw_dashboard
   done
 }
 
