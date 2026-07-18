@@ -301,8 +301,7 @@ redraw_dashboard() {
   local r_status="${YELLOW}后台回程精准识别中 (请稍候...)${NC}"; local r_file="$RESULT_DIR/route_map.txt"
   if [ -s "$r_file" ]; then r_status="${GREEN}回程识别已就绪 (表格内已自动切换对应线路分类)${NC}"; else r_file="/dev/null"; fi
   
-  echo -e "${BOLD}${CYAN}TcpQuality TCP 重传检测--最贴近你上网的综合体验${NC}\033[K"
-  echo -e "${DIM}特价VPS补货TG频道：ibsgss | 感谢 Zstatic CDN 节点${NC}\033[K"
+  echo -e "${BOLD}${CYAN}TcpQuality 画布${NC}\033[K"
   echo -e "${DIM}------------------------------------------------------------${NC}\033[K"
   echo -e "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST (北京时间)')\033[K"
   
