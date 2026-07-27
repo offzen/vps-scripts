@@ -1,5 +1,14 @@
+已更新 请使用新版 
+```
+curl -fsSL https://raw.githubusercontent.com/offzen/TcpQCanvas/main/run | bash
+```
+带参数运行的示例 （-t 0 持续运行/手动终止后开始httping检测） 
+```
+curl -fsSL https://raw.githubusercontent.com/offzen/TcpQCanvas/main/run -o TcpQCanvas.sh && bash TcpQCanvas.sh -v4 -gd -sh -cq -t 240
+```
+
 # 对TcpQuality Canvas的说明
-使用了[https://tcpquality.ibsgss.uk/run](https://github.com/ibsgss/TcpQuality) 项目已经做好的API；并深度修改原作。
+使用了https://github.com/ibsgss/TcpQuality 项目已经做好的API；并深度修改原作。
 
 ## 一、 探测机制的从 Raw Socket 到标准 L4/L7 伪装
 
